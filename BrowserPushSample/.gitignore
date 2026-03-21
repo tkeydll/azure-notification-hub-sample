@@ -1,0 +1,34 @@
+# ── 機密設定ファイル ──────────────────────────────
+# appsettings.json には本番の接続文字列・キーが含まれるため除外
+# appsettings.Development.json など開発用は個別に判断
+**/appsettings.json
+# 必要なら appsettings.json.example (テンプレート) だけをコミット
+
+# ── .NET ビルド成果物 ────────────────────────────
+bin/
+obj/
+
+# ── Node.js ─────────────────────────────────────
+node_modules/
+
+# ── Playwright テスト用ブラウザプロファイル ──────
+test-profile/
+test-profile-direct/
+test-profile-direct3/
+test-profile-v3/
+
+# ── テスト結果 ──────────────────────────────────
+test-results/
+playwright-report/
+
+# ── バックアップファイル ─────────────────────────
+*.bak
+
+# ── OS 生成ファイル ──────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Visual Studio / VS Code ──────────────────────
+.vs/
+*.user
+*.suo

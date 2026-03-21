@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Push - Azure Notification Hubs</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+        .container { max-width: 700px; margin: 0 auto; }
+        h1 { color: #0078d4; margin-bottom: 10px; font-size: 1.5rem; }
+        .subtitle { color: #888; margin-bottom: 30px; }
+        .card { background: #16213e; border-radius: 12px; padding: 24px; margin-bottom: 20px; border: 1px solid #0f3460; }
+        .card h2 { color: #e94560; font-size: 1.1rem; margin-bottom: 12px; }
+        button { background: #0078d4; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1rem; cursor: pointer; margin: 5px 5px 5px 0; transition: background 0.2s; }
+        button:hover { background: #106ebe; }
+        button:disabled { background: #444; cursor: not-allowed; }
+        .btn-danger { background: #e94560; }
+        .btn-danger:hover { background: #c73e54; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        #log { background: #0a0a1a; border-radius: 8px; padding: 16px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 0.85rem; max-height: 400px; overflow-y: auto; line-height: 1.6; border: 1px solid #333; }
+        .log-info { color: #0078d4; }
+        .log-success { color: #28a745; }
+        .log-error { color: #e94560; }
+        .log-warn { color: #ffc107; }
+        .log-data { color: #888; }
+        .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: bold; }
+        .status-off { background: #333; color: #888; }
+        .status-on { background: #1b4332; color: #28a745; }
+        .status-err { background: #3d1f29; color: #e94560; }
+        .input-group { margin: 10px 0; }
+        .input-group input { background: #0a0a1a; border: 1px solid #333; color: #eee; padding: 10px; border-radius: 6px; width: 100%; font-size: 0.95rem; }
+        .step-num { display: inline-block; background: #0078d4; color: white; width: 28px; height: 28px; border-radius: 50%; text-align: center; line-height: 28px; font-size: 0.85rem; margin-right: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔔 Browser Push Notification</h1>
+        <p class="subtitle">Azure Notification Hubs - ブラウザプッシュ通知 E2E テスト</p>
+
+        <!-- Step 1: Service Worker -->
+        <div class="card">
+            <h2><span class="step-num">1</span>Service Worker 登録</h2>
+            <p>プッシュ通知を受信するには Service Worker が必要です。</p>
+            <br>
+            <button id="btnRegisterSW" onclick="registerServiceWorker()">Service Worker を登録</button>
+            <span id="swStatus" class="status status-off">未登録</span>
+        </div>
+
+        <!-- Step 2: Push Subscription -->
+        <div class="card">
+            <h2><span class="step-num">2</span>プッシュ通知を購読</h2>
+            <p>ブラウザの PushManager.subscribe() を呼び出し、Push Service に登録します。</p>
+            <p style="color: #888; margin-top: 4px; font-size: 0.85rem;">→ 通知の許可ダイアログが表示されます。「許可」をクリックしてください。</p>
+            <br>
+            <button id="btnSubscribe" onclick="subscribePush()" disabled>プッシュ通知を購読</button>
+            <span id="subStatus" class="status status-off">未購読</span>
+        </div>
+
+        <!-- Step 3: Register with Azure NH -->
+        <div class="card">
+            <h2><span class="step-num">3</span>Azure Notification Hubs に登録</h2>
+            <p>取得した PushSubscription を Azure Notification Hubs に Installation として登録します。</p>
+            <br>
+            <button id="btnRegisterNH" onclick="registerWithHub()" disabled>Azure NH に登録</button>
+            <span id="nhStatus" class="status status-off">未登録</span>
+        </div>
+
+        <!-- Step 4: Send Notification -->
+        <div class="card">
+            <h2><span class="step-num">4</span>プッシュ通知を送信</h2>
+            <p>Azure Notification Hubs 経由で実際にプッシュ通知を送信します。</p>
+            <div class="input-group">
+                <input id="inputTitle" type="text" placeholder="タイトル" value="Azure Notification Hubs テスト">
+            </div>
+            <div class="input-group">
+                <input id="inputMessage" type="text" placeholder="メッセージ" value="ブラウザプッシュ通知が届きました！🎉">
+            </div>
+            <br>
+            <button id="btnSend" onclick="sendNotification()" disabled class="btn-success">🚀 通知を送信</button>
+        </div>
+
+        <!-- Reset & Re-register -->
+        <div class="card" style="border-color: #e94560;">
+            <h2 style="color:#e94560;">🔄 全リセット＆再登録</h2>
+            <p>Azure NH の古い登録を全削除し、購読を更新して再登録します。</p>
+            <p style="color:#888; font-size:0.85rem; margin-top:4px;">→ Playwright テスト後や「通知が届かなくなった」ときに使用</p>
+            <br>
+            <button id="btnReset" onclick="resetAndReregister()" class="btn-danger">🔄 クリーンアップして再登録</button>
+            <span id="resetStatus" class="status status-off">待機中</span>
+        </div>
+
+        <!-- Log -->
+        <div class="card">
+            <h2>📋 ログ</h2>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let swRegistration = null;
+        let pushSubscription = null;
+        let installationId = null;
+
+        function log(msg, cls = 'log-info') {
+            const el = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            el.innerHTML += `<div class="${cls}">[${time}] ${msg}</div>`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function setStatus(id, text, cls) {
+            const el = document.getElementById(id);
+            el.textContent = text;
+            el.className = `status ${cls}`;
+        }
+
+        // ── Step 1: Service Worker 登録 ──
+        async function registerServiceWorker() {
+            log('Service Worker を登録中...');
+            try {
+                if (!('serviceWorker' in navigator)) {
+                    throw new Error('このブラウザは Service Worker をサポートしていません');
+                }
+                swRegistration = await navigator.serviceWorker.register('/sw.js');
+                log('✓ Service Worker 登録完了', 'log-success');
+                log(`  scope: ${swRegistration.scope}`, 'log-data');
+                log(`  state: ${swRegistration.active?.state || swRegistration.installing?.state || 'installing'}`, 'log-data');
+
+                setStatus('swStatus', '登録済み', 'status-on');
+                document.getElementById('btnSubscribe').disabled = false;
+
+                // Service Worker がアクティブになるのを待つ
+                if (!swRegistration.active) {
+                    log('  Service Worker のアクティブ化を待機中...', 'log-data');
+                    await new Promise(resolve => {
+                        const sw = swRegistration.installing || swRegistration.waiting;
+                        if (sw) {
+                            sw.addEventListener('statechange', () => {
+                                if (sw.state === 'activated') resolve();
+                            });
+                        } else {
+                            resolve();
+                        }
+                    });
+                    log('  ✓ Service Worker アクティブ', 'log-success');
+                }
+            } catch (err) {
+                log(`✗ Service Worker 登録失敗: ${err.message}`, 'log-error');
+                setStatus('swStatus', 'エラー', 'status-err');
+            }
+        }
+
+        // ── Step 2: プッシュ購読 ──
+        async function subscribePush() {
+            log('通知の許可を確認中...');
+            try {
+                // まずSWがreadyになるのを確認
+                const reg = await navigator.serviceWorker.ready;
+                log(`  Service Worker ready: scope=${reg.scope}`, 'log-data');
+                swRegistration = reg;
+
+                // 明示的に通知許可をリクエスト
+                log('  Notification.requestPermission() を呼び出します...', 'log-warn');
+                log('  → 通知の「許可」ボタンをクリックしてください！', 'log-warn');
+                const permission = await Notification.requestPermission();
+                log(`  通知許可の結果: ${permission}`, permission === 'granted' ? 'log-success' : 'log-error');
+
+                if (permission !== 'granted') {
+                    throw new Error(`通知が許可されませんでした (${permission})。ブラウザのアドレスバー左の🔒アイコン → サイトの設定 → 通知 を「許可」に変更してください`);
+                }
+
+                // VAPID公開鍵をサーバーから取得
+                log('VAPID 公開鍵を取得中...');
+                const vapidRes = await fetch('/api/vapid-key');
+                if (!vapidRes.ok) throw new Error(`VAPID key 取得失敗: ${vapidRes.status}`);
+                const { vapidPublicKey } = await vapidRes.json();
+                log(`  VAPID Public Key: ${vapidPublicKey.substring(0, 30)}...`, 'log-data');
+
+                // Base64URL → Uint8Array
+                const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+                log(`  applicationServerKey: ${applicationServerKey.length} bytes`, 'log-data');
+
+                // 既存の購読があるか確認
+                const existingSub = await swRegistration.pushManager.getSubscription();
+                if (existingSub) {
+                    log('  既存のPush購読を解除中...', 'log-data');
+                    await existingSub.unsubscribe();
+                }
+
+                log('PushManager.subscribe() を呼び出し中...');
+                pushSubscription = await swRegistration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: applicationServerKey
+                });
+
+                log('✓ プッシュ購読完了！', 'log-success');
+
+                // PushSubscription の詳細
+                const sub = pushSubscription.toJSON();
+                log(`  endpoint: ${sub.endpoint}`, 'log-data');
+                log(`  p256dh: ${sub.keys.p256dh.substring(0, 30)}...`, 'log-data');
+                log(`  auth: ${sub.keys.auth}`, 'log-data');
+
+                // Push Service を判定
+                const url = new URL(sub.endpoint);
+                let pushService = '不明';
+                if (url.host.includes('fcm.googleapis.com')) pushService = 'Google FCM (Chrome/Edge)';
+                else if (url.host.includes('mozilla.com')) pushService = 'Mozilla Push Service (Firefox)';
+                else if (url.host.includes('notify.windows.com')) pushService = 'Windows Push (Edge)';
+                log(`  Push Service: ${pushService}`, 'log-data');
+                log(`  endpoint host: ${url.host}`, 'log-data');
+
+                setStatus('subStatus', '購読済み', 'status-on');
+                document.getElementById('btnRegisterNH').disabled = false;
+
+            } catch (err) {
+                log(`✗ プッシュ購読失敗: ${err.message}`, 'log-error');
+                if (err.message.includes('denied') || err.message.includes('permission')) {
+                    log('  → 通知の許可が拒否されました。ブラウザの設定で通知を許可してください。', 'log-warn');
+                }
+                setStatus('subStatus', 'エラー', 'status-err');
+            }
+        }
+
+        // ── Step 3: Azure NH に登録 ──
+        async function registerWithHub() {
+            log('Azure Notification Hubs に PushSubscription を登録中...');
+            try {
+                const sub = pushSubscription.toJSON();
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        endpoint: sub.endpoint,
+                        p256dh: sub.keys.p256dh,
+                        auth: sub.keys.auth
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`HTTP ${res.status}: ${errText}`);
+                }
+
+                const result = await res.json();
+                installationId = result.installationId;
+                log(`✓ Azure NH 登録完了！`, 'log-success');
+                log(`  Installation ID: ${installationId}`, 'log-data');
+
+                setStatus('nhStatus', '登録済み', 'status-on');
+                document.getElementById('btnSend').disabled = false;
+
+            } catch (err) {
+                log(`✗ Azure NH 登録失敗: ${err.message}`, 'log-error');
+                setStatus('nhStatus', 'エラー', 'status-err');
+            }
+        }
+
+        // ── Step 4: 通知送信 ──
+        async function sendNotification() {
+            const title = document.getElementById('inputTitle').value;
+            const message = document.getElementById('inputMessage').value;
+
+            log(`通知を送信中... タイトル: "${title}"`);
+            try {
+                const res = await fetch('/api/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, message })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`HTTP ${res.status}: ${errText}`);
+                }
+
+                const result = await res.json();
+                log('✓ 通知送信完了！', 'log-success');
+                if (result.results) {
+                    for (const r of result.results) {
+                        if (r.error) {
+                            log(`  [${r.method}] ✗ ${r.error}`, 'log-error');
+                        } else {
+                            log(`  [${r.method}] State: ${r.state} Success: ${r.success} Failure: ${r.failure}`, 'log-data');
+                            log(`    TrackingId: ${r.trackingId || '(empty)'}`, 'log-data');
+                            if (r.details) {
+                                for (const d of r.details) {
+                                    log(`    → ${d.applicationPlatform}: ${d.outcome} (RegId: ${d.registrationId || 'N/A'})`, d.outcome === 'The Notification was successfully sent to the Push Notification System' ? 'log-success' : 'log-error');
+                                }
+                            }
+                        }
+                    }
+                }
+                log('  → 数秒以内にブラウザ通知が届くはずです！', 'log-warn');
+
+            } catch (err) {
+                log(`✗ 送信失敗: ${err.message}`, 'log-error');
+            }
+        }
+
+        // ── ユーティリティ: Base64URL → Uint8Array ──
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        // ── 全リセット＆再登録 ──
+        async function resetAndReregister() {
+            const btn = document.getElementById('btnReset');
+            btn.disabled = true;
+            setStatus('resetStatus', '実行中...', 'status-off');
+            log('🔄 全リセット＆再登録を開始します...', 'log-warn');
+
+            try {
+                // 1. Azure NH の古い登録を全削除
+                log('  [1/4] Azure NH の古いレジストレーションを削除中...', 'log-info');
+                const cleanupRes = await fetch('/api/cleanup', { method: 'POST' });
+                if (!cleanupRes.ok) throw new Error(`cleanup 失敗: ${cleanupRes.status}`);
+                const cleanup = await cleanupRes.json();
+                log(`  ✓ 削除完了: ${cleanup.deleted}件 削除 (合計 ${cleanup.total}件)`, 'log-success');
+                log(`  新しい送信タグ: ${cleanup.newRunTag}`, 'log-data');
+
+                // 2. Service Worker を再登録
+                log('  [2/4] Service Worker を再登録中...', 'log-info');
+                if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    for (const r of regs) await r.unregister();
+                }
+                swRegistration = await navigator.serviceWorker.register('/sw.js');
+                await navigator.serviceWorker.ready;
+                log('  ✓ Service Worker 再登録完了', 'log-success');
+                setStatus('swStatus', '登録済み', 'status-on');
+
+                // 3. 既存購読を解除して新規購読
+                log('  [3/4] Push購読を更新中...', 'log-info');
+                const perm = await Notification.requestPermission();
+                if (perm !== 'granted') throw new Error(`通知権限が拒否されました (${perm})`);
+                log('  ✓ 通知権限: 許可済み', 'log-success');
+
+                const reg = await navigator.serviceWorker.ready;
+                const existingSub = await reg.pushManager.getSubscription();
+                if (existingSub) await existingSub.unsubscribe();
+
+                const vapidRes = await fetch('/api/vapid-key');
+                if (!vapidRes.ok) throw new Error('VAPID key 取得失敗');
+                const { vapidPublicKey } = await vapidRes.json();
+                const appKey = urlBase64ToUint8Array(vapidPublicKey);
+
+                pushSubscription = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: appKey
+                });
+                const sub = pushSubscription.toJSON();
+                log(`  ✓ 新しい Push 購読完了`, 'log-success');
+                log(`  endpoint: ${sub.endpoint.substring(0, 60)}...`, 'log-data');
+                setStatus('subStatus', '購読済み', 'status-on');
+
+                // 4. Azure NH に新規登録
+                log('  [4/4] Azure NH に新規登録中...', 'log-info');
+                const regRes = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        endpoint: sub.endpoint,
+                        p256dh: sub.keys.p256dh,
+                        auth: sub.keys.auth
+                    })
+                });
+                if (!regRes.ok) throw new Error(`NH 登録失敗: ${regRes.status}`);
+                const regResult = await regRes.json();
+                installationId = regResult.installationId;
+                log(`  ✓ Azure NH 登録完了: ${installationId}`, 'log-success');
+                setStatus('nhStatus', '登録済み', 'status-on');
+
+                document.getElementById('btnSubscribe').disabled = false;
+                document.getElementById('btnRegisterNH').disabled = false;
+                document.getElementById('btnSend').disabled = false;
+
+                log('🎉 全リセット＆再登録 完了！通知を送信できます。', 'log-success');
+                setStatus('resetStatus', '完了', 'status-on');
+            } catch (err) {
+                log(`✗ リセット失敗: ${err.message}`, 'log-error');
+                setStatus('resetStatus', 'エラー', 'status-err');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // ── 初期化 ──
+        window.addEventListener('load', () => {
+            log('ページ読み込み完了');
+            if (!('serviceWorker' in navigator)) {
+                log('⚠ Service Worker 非対応ブラウザです', 'log-error');
+            }
+            if (!('PushManager' in window)) {
+                log('⚠ Push API 非対応ブラウザです', 'log-error');
+            }
+            if (Notification.permission === 'granted') {
+                log('  通知権限: 許可済み', 'log-data');
+            } else if (Notification.permission === 'denied') {
+                log('  ⚠ 通知権限: 拒否されています。ブラウザ設定で許可してください', 'log-warn');
+            } else {
+                log('  通知権限: 未設定 (購読時に許可を求めます)', 'log-data');
+            }
+
+            // Service Worker からのプッシュ受信メッセージをリッスン
+            navigator.serviceWorker?.addEventListener('message', (event) => {
+                if (event.data?.type === 'PUSH_RECEIVED') {
+                    log('🔔 プッシュ通知を受信しました！', 'log-success');
+                    log(`  タイトル: ${event.data.payload?.title}`, 'log-data');
+                    log(`  本文: ${event.data.payload?.body || event.data.payload?.message}`, 'log-data');
+                    log(`  受信時刻: ${event.data.timestamp}`, 'log-data');
+                    // テスト検知用の隠し要素を更新
+                    let el = document.getElementById('pushReceived');
+                    if (!el) {
+                        el = document.createElement('div');
+                        el.id = 'pushReceived';
+                        el.style.display = 'none';
+                        document.body.appendChild(el);
+                    }
+                    el.setAttribute('data-received', 'true');
+                    el.setAttribute('data-title', event.data.payload?.title || '');
+                    el.setAttribute('data-body', event.data.payload?.body || event.data.payload?.message || '');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
