@@ -157,3 +157,78 @@ Azure Notification Hub の BrowserCredential に設定する **Subject** は、W
 ❌ Subject: "test"           → 全配信失敗 (unknown error)
 ✅ Subject: "mailto:you@example.com"  → 正常に配信
 ```
+
+## Wireshark によるネットワーク実測
+
+Playwright E2E テスト実行時に Wireshark でキャプチャした実測データです。
+
+### キャプチャで確認できた通信フロー
+
+```
+ブラウザ (Chrome)              アプリサーバー              Azure NH                    FCM
+     │                              │                         │                         │
+     │ ① PushManager.subscribe()   │                         │                         │
+     │─────────────────────────────────────────────────────────────────────────────────→│
+     │  signaler-pa.googleapis.com:443 (TLSv1.3)              │                         │
+     │  フレーム #824  (t=27.8s)    │                         │       endpoint 発行      │
+     │ ←───────────────────────────────────────────────────────────────────────────────│
+     │  endpoint: https://jmt17.google.com/fcm/send/...        │                         │
+     │                              │                         │                         │
+     │ ② endpoint をサーバーへ送信  │                         │                         │
+     │ ────────────────────────────→│                         │                         │
+     │  POST /api/register          │                         │                         │
+     │                              │                         │                         │
+     │                              │ ③ Installation 登録     │                         │
+     │                              │────────────────────────→│                         │
+     │                              │  PUT /installations/... (TLSv1.3)                 │
+     │                              │  jns-notification-hub-ns.servicebus.windows.net   │
+     │                              │  フレーム #1691 (t=43.4s)│                         │
+     │                              │←────────────────────────│                         │
+     │                              │  200 OK                  │                         │
+     │                              │                         │                         │
+     │ ④ mtalk 常時接続確立         │                         │                         │
+     │─────────────────────────────────────────────────────────────────────────────────→│
+     │  mtalk.google.com:5228 (TLSv1.3)                       │    Chrome が待ち受け開始 │
+     │  フレーム #1909 (t=47.6s)    │                         │                         │
+     │                              │                         │                         │
+     │                              │ ⑤ 通知送信リクエスト    │                         │
+     │                              │────────────────────────→│                         │
+     │                              │  POST /messages (TLSv1.3)│                         │
+     │                              │  フレーム #2376 (t=51.5s)│                         │
+     │                              │←────────────────────────│                         │
+     │                              │  201 Created             │                         │
+     │                              │                         │                         │
+     │                              │                         │ ⑥ FCM に Web Push 送信  │
+     │                              │                         │────────────────────────→│
+     │                              │                         │  fcm.googleapis.com      │
+     │                              │                         │  ※クラウド内・キャプチャ不可│
+     │                              │                         │                         │
+     │ ⑦ プッシュ受信               │                         │                         │
+     │ ←───────────────────────────────────────────────────────────────────────────────│
+     │  mtalk.google.com:5228 から着信                         │                         │
+     │  フレーム #2753 (t=68.1s)    │                         │                         │
+     │  Service Worker → push イベント → showNotification()   │                         │
+```
+
+### 確認できたフレーム一覧
+
+| フレーム | 経過時間 | 接続先 | SNI / 内容 |
+|---------|---------|--------|-----------|
+| #824 | t=27.8s | `signaler-pa.googleapis.com:443` | **TLS Client Hello** → Push endpoint 取得 |
+| #1691 | t=43.4s | `jns-notification-hub-ns.servicebus.windows.net:443` | **TLS Client Hello** → Installation 登録（PUT）|
+| #1703 | t=43.5s | 同上 | **200 OK** レスポンス |
+| #2376 | t=51.5s | `jns-notification-hub-ns.servicebus.windows.net:443` | **TLS Client Hello** → 通知送信（POST /messages）|
+| #2399 | t=51.6s | 同上 | **201 Created** レスポンス |
+| #1909 | t=47.6s | `mtalk.google.com:5228` | **TLS Client Hello** → FCM 常時接続確立 |
+| **#2753** | **t=68.1s** | `mtalk.google.com:5228` | **← Application Data（通知着信）** |
+
+### ホスト別の役割
+
+| ホスト | ポート | キャプチャ可否 | 役割 |
+|--------|--------|--------------|------|
+| `signaler-pa.googleapis.com` | 443 | ✅ ローカルで可 | `PushManager.subscribe()` 時に Push endpoint を発行 |
+| `jns-notification-hub-ns.servicebus.windows.net` | 443 | ✅ ローカルで可 | Azure NH への Installation 登録・通知送信 |
+| `fcm.googleapis.com` | 443 | ❌ クラウド内のみ | Azure NH が FCM に Web Push を送信（クラウド内通信） |
+| `mtalk.google.com` | 5228 | ✅ ローカルで可 | Chrome が FCM から通知を受け取る常時接続 |
+
+> **補足**: `fcm.googleapis.com` への送信は Azure NH のクラウド内で行われるため、ローカルの Wireshark では直接見えません。ローカルでキャプチャできるのは **ブラウザが FCM から受け取る側** (`mtalk.google.com:5228`) への常時接続のみです。
